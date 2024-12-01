@@ -12,7 +12,8 @@ import {AggregatorV3Interface} from "@chainlink/contracts/v0.8/shared/interfaces
 contract BestFeesHook is BaseHook {
     using LPFeeLibrary for uint24;
 
-    AggregatorV3Interface internal volatilityFeed;
+    AggregatorV3Interface internal volatility24HFeed;
+    AggregatorV3Interface internal volatility7DFeed;
 
     // The default base fees we will charge
     uint24 public constant BASE_FEE = 5000; // 0.5%
@@ -22,9 +23,11 @@ contract BestFeesHook is BaseHook {
     // Initialize BaseHook parent contract in the constructor
     constructor(
         IPoolManager _poolManager,
-        address _volatilityFeed
+        address _volatility24HFeed,
+        address _volatility7DFeed
     ) BaseHook(_poolManager) {
-        volatilityFeed = AggregatorV3Interface(_volatilityFeed);
+        volatility24HFeed = AggregatorV3Interface(_volatility24HFeed);
+        volatility7DFeed = AggregatorV3Interface(_volatility7DFeed);
     }
 
     // Required override function for BaseHook to let the PoolManager know which hooks are implemented
@@ -87,7 +90,7 @@ contract BestFeesHook is BaseHook {
         return BASE_FEE;
     }
 
-    function getChainlinkVolatilityFeedLatestAnswer()
+    function getChainlinkVolatility24HFeedLatestAnswer()
         public
         view
         returns (int)
@@ -99,7 +102,23 @@ contract BestFeesHook is BaseHook {
             /*uint startedAt*/,
             /*uint timeStamp*/,
             /*uint80 answeredInRound*/
-        ) = volatilityFeed.latestRoundData();
+        ) = volatility24HFeed.latestRoundData();
+        return answer;
+    }
+
+    function getChainlinkVolatility7DFeedLatestAnswer()
+        public
+        view
+        returns (int)
+    {
+        // prettier-ignore
+        (
+            /* uint80 roundID */,
+            int answer,
+            /*uint startedAt*/,
+            /*uint timeStamp*/,
+            /*uint80 answeredInRound*/
+        ) = volatility7DFeed.latestRoundData();
         return answer;
     }
 }

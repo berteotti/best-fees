@@ -42,7 +42,11 @@ contract TestBestFeesHook is Test, Deployers {
         vm.txGasPrice(10 gwei);
         deployCodeTo(
             "BestFeesHook",
-            abi.encode(manager, 0x31D04174D0e1643963b38d87f26b0675Bb7dC96e),
+            abi.encode(
+                manager,
+                0x31D04174D0e1643963b38d87f26b0675Bb7dC96e,
+                0x31D04174D0e1643963b38d87f26b0675Bb7dC96e
+            ),
             hookAddress
         );
         hook = BestFeesHook(hookAddress);
@@ -70,7 +74,7 @@ contract TestBestFeesHook is Test, Deployers {
     }
 
     function test_ChainlinkVolatilityFeed() public {
-        int value = hook.getChainlinkVolatilityFeedLatestAnswer();
+        int value = hook.getChainlinkVolatility24HFeedLatestAnswer();
 
         console.log("value", value);
     }
