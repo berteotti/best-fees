@@ -7,9 +7,12 @@ import {Hooks} from "v4-core/libraries/Hooks.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {LPFeeLibrary} from "v4-core/libraries/LPFeeLibrary.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/types/BeforeSwapDelta.sol";
+import {AggregatorV3Interface} from "@chainlink/contracts/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 
-contract GasPriceFeesHook is BaseHook {
+contract BestFeesHook is BaseHook {
     using LPFeeLibrary for uint24;
+
+    AggregatorV3Interface internal volatilityFeed;
 
     // The default base fees we will charge
     uint24 public constant BASE_FEE = 5000; // 0.5%
@@ -17,7 +20,12 @@ contract GasPriceFeesHook is BaseHook {
     error MustUseDynamicFee();
 
     // Initialize BaseHook parent contract in the constructor
-    constructor(IPoolManager _poolManager) BaseHook(_poolManager) {}
+    constructor(
+        IPoolManager _poolManager,
+        address _volatilityFeed
+    ) BaseHook(_poolManager) {
+        volatilityFeed = AggregatorV3Interface(_volatilityFeed);
+    }
 
     // Required override function for BaseHook to let the PoolManager know which hooks are implemented
     function getHookPermissions()
@@ -77,5 +85,21 @@ contract GasPriceFeesHook is BaseHook {
 
     function getFee() internal pure returns (uint24) {
         return BASE_FEE;
+    }
+
+    function getChainlinkVolatilityFeedLatestAnswer()
+        public
+        view
+        returns (int)
+    {
+        // prettier-ignore
+        (
+            /* uint80 roundID */,
+            int answer,
+            /*uint startedAt*/,
+            /*uint timeStamp*/,
+            /*uint80 answeredInRound*/
+        ) = volatilityFeed.latestRoundData();
+        return answer;
     }
 }
