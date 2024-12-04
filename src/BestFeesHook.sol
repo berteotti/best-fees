@@ -8,6 +8,8 @@ import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {LPFeeLibrary} from "v4-core/libraries/LPFeeLibrary.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/types/BeforeSwapDelta.sol";
 import {AggregatorV3Interface} from "@chainlink/contracts/v0.8/shared/interfaces/AggregatorV3Interface.sol";
+import {ABDKMath64x64} from "abdk-libraries-solidity/ABDKMath64x64.sol";
+import {console} from "forge-std/console.sol";
 
 contract BestFeesHook is BaseHook {
     using LPFeeLibrary for uint24;
@@ -18,8 +20,8 @@ contract BestFeesHook is BaseHook {
     int128 private immutable maxFee; // Maximum fee (e.g., 1.0% = 10000 basis points)
 
     // Sigmoid parameters
-    int128 private immutable a; // Steepness of the sigmoid curve
-    int128 private immutable b; // Midpoint of the sigmoid curve (volatility level)
+    int128 private immutable alpha = 2; // Steepness of the sigmoid curve
+    int128 private immutable beta = 5; // Midpoint of the sigmoid curve (volatility level)
 
     AggregatorV3Interface internal volatility24HFeed;
     AggregatorV3Interface internal volatility7DFeed;
@@ -36,14 +38,24 @@ contract BestFeesHook is BaseHook {
         address _volatility7DFeed,
         uint256 _minFee,
         uint256 _maxFee,
-        uint256 _a,
-        uint256 _b
+        uint256 _alpha,
+        uint256 _beta
     ) BaseHook(_poolManager) {
         // Initialize parameters as 64x64 fixed-point numbers
+        require(
+            uint24(_minFee) >= type(uint24).min &&
+                uint24(_minFee) <= type(uint24).max,
+            "minFee range out of uint24 range"
+        );
+        require(
+            uint24(_maxFee) >= type(uint24).min &&
+                uint24(_maxFee) <= type(uint24).max,
+            "maxFee range out of uint24 range"
+        );
         minFee = ABDKMath64x64.fromUInt(_minFee); // Convert to fixed-point
         maxFee = ABDKMath64x64.fromUInt(_maxFee);
-        a = ABDKMath64x64.fromUInt(_a);
-        b = ABDKMath64x64.fromUInt(_b);
+        alpha = ABDKMath64x64.fromUInt(_alpha);
+        beta = ABDKMath64x64.fromUInt(_beta);
 
         volatility24HFeed = AggregatorV3Interface(_volatility24HFeed);
         volatility7DFeed = AggregatorV3Interface(_volatility7DFeed);
@@ -65,7 +77,7 @@ contract BestFeesHook is BaseHook {
                 afterAddLiquidity: false,
                 afterRemoveLiquidity: false,
                 beforeSwap: true,
-                afterSwap: true,
+                afterSwap: false,
                 beforeDonate: false,
                 afterDonate: false,
                 beforeSwapReturnDelta: false,
@@ -105,8 +117,11 @@ contract BestFeesHook is BaseHook {
         );
     }
 
-    function getFee() internal pure returns (uint24) {
-        return BASE_FEE;
+    function getFee() public view returns (uint24) {
+        int vol7d = getChainlinkVolatility7DFeedLatestAnswer();
+        int vol24h = getChainlinkVolatility24HFeedLatestAnswer();
+
+        return calculateDynamicFee(vol7d, vol24h);
     }
 
     function getChainlinkVolatility24HFeedLatestAnswer()
@@ -164,15 +179,24 @@ contract BestFeesHook is BaseHook {
      * @param volatility The measured volatility (as an unsigned integer percentage, e.g., 500 for 5%).
      * @return dynamicFee The computed fee in basis points.
      */
-    function calculateDynamicFee(
-        uint256 volatility
-    ) public view returns (uint256) {
+    function calculateSigmoidFee(
+        int256 volatility,
+        int128 alpha,
+        int128 beta
+    ) public view returns (uint24) {
+        //TODO adjust volatility decimals
         // Convert volatility to 64x64 fixed-point
-        int128 vol = ABDKMath64x64.fromUInt(volatility);
+        // int128 vol = ABDKMath64x64.fromInt(volatility);
+        int128 vol = ABDKMath64x64.div(
+            ABDKMath64x64.fromInt(volatility),
+            ABDKMath64x64.fromUInt(10 ** 4)
+        );
+        console.log("volatility", volatility);
+        console.log("vol", ABDKMath64x64.toInt(vol));
 
         // Sigmoid function: 1 / (1 + exp(-a * (vol - b)))
-        int128 scaledVolatility = vol.sub(b); // (volatility - b)
-        int128 exponent = a.mul(scaledVolatility); // a * (volatility - b)
+        int128 scaledVolatility = vol.sub(beta); // (volatility - b)
+        int128 exponent = alpha.mul(scaledVolatility); // a * (volatility - b)
         int128 expValue = ABDKMath64x64.exp(exponent.neg()); // exp(-a * (volatility - b))
         int128 sigmoid = ABDKMath64x64.div(
             ABDKMath64x64.fromInt(1),
@@ -183,7 +207,47 @@ contract BestFeesHook is BaseHook {
         int128 feeRange = maxFee.sub(minFee); // (maxFee - minFee)
         int128 dynamicFee = minFee.add(feeRange.mul(sigmoid));
 
-        // Convert dynamicFee to a standard uint256 (basis points)
-        return ABDKMath64x64.toUInt(dynamicFee);
+        // Convert dynamicFee to uint24 (basis points)
+        return uint24(ABDKMath64x64.toUInt(dynamicFee));
+    }
+
+    function calculateDynamicFee(
+        int256 vol7d,
+        int256 vol24h
+    ) public view returns (uint24) {
+        // Calculate the trend
+        int256 trend = vol7d - vol24h;
+
+        // Adjust sigmoid parameters based on the trend
+        int128 adjustedAlpha = alpha; // Base steepness
+        int128 adjustedBeta = beta; // Base midpoint
+
+        if (trend > 0) {
+            // Decreasing volatility: Favor lower fees
+
+            // Reduce steepness - default value = 1.5
+            adjustedAlpha = alpha.sub(
+                ABDKMath64x64.div(alpha, ABDKMath64x64.fromUInt(4))
+            );
+
+            // Raise midpoint - default value = 6
+            adjustedBeta = beta.add(
+                ABDKMath64x64.div(beta, ABDKMath64x64.fromUInt(5))
+            );
+        } else if (trend < 0) {
+            // Increasing volatility: Favor higher fees
+
+            // Increase steepness - default value = 2.5
+            adjustedAlpha = alpha.add(
+                ABDKMath64x64.div(alpha, ABDKMath64x64.fromUInt(4))
+            );
+            // Lower midpoint - default value = 4
+            adjustedBeta = beta.sub(
+                ABDKMath64x64.div(beta, ABDKMath64x64.fromUInt(5))
+            );
+        }
+
+        // Calculate the sigmoid-based fee using adjusted parameters
+        return calculateSigmoidFee(vol24h, adjustedAlpha, adjustedBeta);
     }
 }

@@ -15,14 +15,32 @@ import {PoolSwapTest} from "v4-core/test/PoolSwapTest.sol";
 import {BestFeesHook} from "../src/BestFeesHook.sol";
 import {TickMath} from "v4-core/libraries/TickMath.sol";
 import {console} from "forge-std/console.sol";
+import {MockV3Aggregator} from "./mocks/MockV3Aggregator.sol";
 
 contract TestBestFeesHook is Test, Deployers {
     using CurrencyLibrary for Currency;
     using PoolIdLibrary for PoolKey;
 
     BestFeesHook hook;
+    MockV3Aggregator public mockV3Aggregator24H;
+    MockV3Aggregator public mockV3Aggregator7D;
+
+    uint8 public constant DECIMALS = 5;
+    int256 public constant INITIAL_ANSWER_24H = 35 * 10 ** 4; //50%
+    int256 public constant INITIAL_ANSWER_7D = 1 * 10 ** 1; //100%
+
+    int256 public constant MIN_FEE = 3000;
+    int256 public constant MAX_FEE = 10000;
+    int256 public constant ALPHA = 2; // steepness
+    int256 public constant BETA = 5; // midpoint
 
     function setUp() public {
+        mockV3Aggregator24H = new MockV3Aggregator(
+            DECIMALS,
+            INITIAL_ANSWER_24H
+        );
+        mockV3Aggregator7D = new MockV3Aggregator(DECIMALS, INITIAL_ANSWER_7D);
+
         // Deploy v4-core
         deployFreshManagerAndRouters();
 
@@ -31,11 +49,7 @@ contract TestBestFeesHook is Test, Deployers {
 
         // Deploy our hook with the proper flags
         address hookAddress = address(
-            uint160(
-                Hooks.BEFORE_INITIALIZE_FLAG |
-                    Hooks.BEFORE_SWAP_FLAG |
-                    Hooks.AFTER_SWAP_FLAG
-            )
+            uint160(Hooks.BEFORE_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG)
         );
 
         // Set gas price = 10 gwei and deploy our hook
@@ -44,8 +58,12 @@ contract TestBestFeesHook is Test, Deployers {
             "BestFeesHook",
             abi.encode(
                 manager,
-                0x31D04174D0e1643963b38d87f26b0675Bb7dC96e,
-                0x31D04174D0e1643963b38d87f26b0675Bb7dC96e
+                mockV3Aggregator24H,
+                mockV3Aggregator7D,
+                MIN_FEE,
+                MAX_FEE,
+                ALPHA,
+                BETA
             ),
             hookAddress
         );
@@ -75,6 +93,13 @@ contract TestBestFeesHook is Test, Deployers {
 
     function test_ChainlinkVolatilityFeed() public {
         int value = hook.getChainlinkVolatility24HFeedLatestAnswer();
+
+        console.log("value", value);
+    }
+
+    function test_GetFee() public {
+        mockV3Aggregator24H.updateAnswer(INITIAL_ANSWER_24H);
+        uint24 value = hook.getFee();
 
         console.log("value", value);
     }
