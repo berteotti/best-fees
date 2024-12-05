@@ -184,25 +184,17 @@ contract BestFeesHook is BaseHook {
         int128 alpha,
         int128 beta
     ) public view returns (uint24) {
-        //TODO adjust volatility decimals
-        // Convert volatility to 64x64 fixed-point
-        // int128 vol = ABDKMath64x64.fromInt(volatility);
-        int128 vol = ABDKMath64x64.div(
-            ABDKMath64x64.fromInt(volatility),
-            ABDKMath64x64.fromUInt(10 ** 4)
-        );
-        console.log("volatility", volatility);
-        console.log("vol", ABDKMath64x64.toInt(vol));
+        int128 vol = ABDKMath64x64.fromInt(volatility);
+        int128 decimals = ABDKMath64x64.fromUInt(10 ** 5);
 
-        // Sigmoid function: 1 / (1 + exp(-a * (vol - b)))
-        int128 scaledVolatility = vol.sub(beta); // (volatility - b)
-        int128 exponent = alpha.mul(scaledVolatility); // a * (volatility - b)
+        int128 scaledVolatility = vol.sub(beta.mul(decimals)); // (volatility - b)
+        int128 exponent = alpha.mul(scaledVolatility).div(decimals); // a * (volatility - b)
+
         int128 expValue = ABDKMath64x64.exp(exponent.neg()); // exp(-a * (volatility - b))
         int128 sigmoid = ABDKMath64x64.div(
             ABDKMath64x64.fromInt(1),
             ABDKMath64x64.fromInt(1).add(expValue)
         );
-
         // Map sigmoid output to the fee range: minFee + (maxFee - minFee) * sigmoid
         int128 feeRange = maxFee.sub(minFee); // (maxFee - minFee)
         int128 dynamicFee = minFee.add(feeRange.mul(sigmoid));

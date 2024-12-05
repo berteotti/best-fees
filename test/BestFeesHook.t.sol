@@ -26,8 +26,8 @@ contract TestBestFeesHook is Test, Deployers {
     MockV3Aggregator public mockV3Aggregator7D;
 
     uint8 public constant DECIMALS = 5;
-    int256 public constant INITIAL_ANSWER_24H = 35 * 10 ** 4; //50%
-    int256 public constant INITIAL_ANSWER_7D = 1 * 10 ** 1; //100%
+    int256 public constant INITIAL_ANSWER_24H = 4 * 10 ** 5; //4%
+    int256 public constant INITIAL_ANSWER_7D = 1 * 10 ** 6; //10%
 
     int256 public constant MIN_FEE = 3000;
     int256 public constant MAX_FEE = 10000;
