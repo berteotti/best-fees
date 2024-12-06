@@ -16,6 +16,7 @@ import {BestFeesHook} from "../src/BestFeesHook.sol";
 import {TickMath} from "v4-core/libraries/TickMath.sol";
 import {console} from "forge-std/console.sol";
 import {MockV3Aggregator} from "./mocks/MockV3Aggregator.sol";
+import {AggregatorV3Interface} from "@chainlink/contracts/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 
 contract TestBestFeesHook is Test, Deployers {
     using CurrencyLibrary for Currency;
@@ -78,6 +79,13 @@ contract TestBestFeesHook is Test, Deployers {
             SQRT_PRICE_1_1
         );
 
+        hook.setDataFeed(
+            key,
+            address(mockV3Aggregator24H),
+            address(mockV3Aggregator7D),
+            DECIMALS
+        );
+
         // Add some liquidity
         modifyLiquidityRouter.modifyLiquidity(
             key,
@@ -92,14 +100,16 @@ contract TestBestFeesHook is Test, Deployers {
     }
 
     function test_ChainlinkVolatilityFeed() public {
-        int value = hook.getChainlinkVolatility24HFeedLatestAnswer();
+        int value = hook.getChainlinkVolatility24HFeedLatestAnswer(
+            AggregatorV3Interface(address(mockV3Aggregator24H))
+        );
 
         console.log("value", value);
     }
 
     function test_GetFee() public {
         mockV3Aggregator24H.updateAnswer(INITIAL_ANSWER_24H);
-        uint24 value = hook.getFee();
+        uint24 value = hook.getFee(key.toId());
 
         console.log("value", value);
     }

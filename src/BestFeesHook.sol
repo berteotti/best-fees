@@ -4,8 +4,11 @@ pragma solidity ^0.8.0;
 import {BaseHook} from "v4-periphery/src/base/hooks/BaseHook.sol";
 import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
 import {Hooks} from "v4-core/libraries/Hooks.sol";
-import {PoolKey} from "v4-core/types/PoolKey.sol";
 import {LPFeeLibrary} from "v4-core/libraries/LPFeeLibrary.sol";
+
+import {PoolId, PoolIdLibrary} from "v4-core/types/PoolId.sol";
+import {PoolKey} from "v4-core/types/PoolKey.sol";
+
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "v4-core/types/BeforeSwapDelta.sol";
 import {AggregatorV3Interface} from "@chainlink/contracts/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 import {ABDKMath64x64} from "abdk-libraries-solidity/ABDKMath64x64.sol";
@@ -25,6 +28,14 @@ contract BestFeesHook is BaseHook {
 
     AggregatorV3Interface internal volatility24HFeed;
     AggregatorV3Interface internal volatility7DFeed;
+
+    struct DataFeed {
+        AggregatorV3Interface volatility24HFeed;
+        AggregatorV3Interface volatility7DFeed;
+        uint decimals;
+    }
+
+    mapping(PoolId poolId => DataFeed) dataFeedByPool;
 
     // The default base fees we will charge
     uint24 public constant BASE_FEE = 5000; // 0.5%
@@ -98,13 +109,14 @@ contract BestFeesHook is BaseHook {
         return this.beforeInitialize.selector;
     }
 
+    //TODO make sure this works properly, even without a reliable data feed
     function beforeSwap(
         address,
         PoolKey calldata key,
         IPoolManager.SwapParams calldata,
         bytes calldata
     ) external override returns (bytes4, BeforeSwapDelta, uint24) {
-        uint24 fee = getFee();
+        uint24 fee = getFee(key.toId());
         // If we wanted to generally update LP fee for a longer-term than per-swap
         // poolManager.updateDynamicLPFee(key, fee);
 
@@ -117,18 +129,25 @@ contract BestFeesHook is BaseHook {
         );
     }
 
-    function getFee() public view returns (uint24) {
-        int vol7d = getChainlinkVolatility7DFeedLatestAnswer();
-        int vol24h = getChainlinkVolatility24HFeedLatestAnswer();
+    function getFee(PoolId poolId) public view returns (uint24) {
+        if (address(dataFeedByPool[poolId].volatility24HFeed) == address(0))
+            return BASE_FEE;
+
+        DataFeed memory dataFeed = dataFeedByPool[poolId];
+
+        int vol7d = getChainlinkVolatility7DFeedLatestAnswer(
+            dataFeed.volatility7DFeed
+        );
+        int vol24h = getChainlinkVolatility24HFeedLatestAnswer(
+            dataFeed.volatility24HFeed
+        );
 
         return calculateDynamicFee(vol7d, vol24h);
     }
 
-    function getChainlinkVolatility24HFeedLatestAnswer()
-        public
-        view
-        returns (int)
-    {
+    function getChainlinkVolatility24HFeedLatestAnswer(
+        AggregatorV3Interface _volatility24HFeed
+    ) public view returns (int) {
         // prettier-ignore
         (
             /* uint80 roundID */,
@@ -136,15 +155,13 @@ contract BestFeesHook is BaseHook {
             /*uint startedAt*/,
             /*uint timeStamp*/,
             /*uint80 answeredInRound*/
-        ) = volatility24HFeed.latestRoundData();
+        ) = _volatility24HFeed.latestRoundData();
         return answer;
     }
 
-    function getChainlinkVolatility7DFeedLatestAnswer()
-        public
-        view
-        returns (int)
-    {
+    function getChainlinkVolatility7DFeedLatestAnswer(
+        AggregatorV3Interface _volatility7DFeed
+    ) public view returns (int) {
         // prettier-ignore
         (
             /* uint80 roundID */,
@@ -152,8 +169,30 @@ contract BestFeesHook is BaseHook {
             /*uint startedAt*/,
             /*uint timeStamp*/,
             /*uint80 answeredInRound*/
-        ) = volatility7DFeed.latestRoundData();
+        ) = _volatility7DFeed.latestRoundData();
         return answer;
+    }
+
+    function setDataFeed(
+        PoolKey calldata _key,
+        address _volatility24HFeed,
+        address _volatility7DFeed,
+        uint8 _decimals
+    ) external {
+        dataFeedByPool[_key.toId()] = DataFeed({
+            volatility24HFeed: AggregatorV3Interface(_volatility24HFeed),
+            volatility7DFeed: AggregatorV3Interface(_volatility7DFeed),
+            decimals: _decimals
+        });
+    }
+
+    function deleteDataFeed(PoolKey calldata key) external {
+        require(
+            address(dataFeedByPool[key.toId()].volatility24HFeed) != address(0),
+            "DataFeed does not exist"
+        );
+
+        delete dataFeedByPool[key.toId()];
     }
 
     //TODO Check if math works out, find good a and b default values
@@ -185,12 +224,14 @@ contract BestFeesHook is BaseHook {
         int128 beta
     ) public view returns (uint24) {
         int128 vol = ABDKMath64x64.fromInt(volatility);
+        //TODO this value should come from elsewhere
         int128 decimals = ABDKMath64x64.fromUInt(10 ** 5);
-
-        int128 scaledVolatility = vol.sub(beta.mul(decimals)); // (volatility - b)
-        int128 exponent = alpha.mul(scaledVolatility).div(decimals); // a * (volatility - b)
-
-        int128 expValue = ABDKMath64x64.exp(exponent.neg()); // exp(-a * (volatility - b))
+        // (volatility - b)
+        int128 scaledVolatility = vol.sub(beta.mul(decimals));
+        // a * (volatility - b)
+        int128 exponent = alpha.mul(scaledVolatility).div(decimals);
+        // exp(-a * (volatility - b))
+        int128 expValue = ABDKMath64x64.exp(exponent.neg());
         int128 sigmoid = ABDKMath64x64.div(
             ABDKMath64x64.fromInt(1),
             ABDKMath64x64.fromInt(1).add(expValue)
@@ -217,9 +258,9 @@ contract BestFeesHook is BaseHook {
         if (trend > 0) {
             // Decreasing volatility: Favor lower fees
 
-            // Reduce steepness - default value = 1.5
+            // Reduce steepness - default value = 1
             adjustedAlpha = alpha.sub(
-                ABDKMath64x64.div(alpha, ABDKMath64x64.fromUInt(4))
+                ABDKMath64x64.div(alpha, ABDKMath64x64.fromUInt(2))
             );
 
             // Raise midpoint - default value = 6
@@ -229,9 +270,9 @@ contract BestFeesHook is BaseHook {
         } else if (trend < 0) {
             // Increasing volatility: Favor higher fees
 
-            // Increase steepness - default value = 2.5
+            // Increase steepness - default value = 3
             adjustedAlpha = alpha.add(
-                ABDKMath64x64.div(alpha, ABDKMath64x64.fromUInt(4))
+                ABDKMath64x64.div(alpha, ABDKMath64x64.fromUInt(2))
             );
             // Lower midpoint - default value = 4
             adjustedBeta = beta.sub(
