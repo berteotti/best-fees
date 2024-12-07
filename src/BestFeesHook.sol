@@ -23,8 +23,8 @@ contract BestFeesHook is BaseHook {
     int128 private immutable maxFee; // Maximum fee (e.g., 1.0% = 10000 basis points)
 
     // Sigmoid parameters
-    int128 private immutable alpha = 2; // Steepness of the sigmoid curve
-    int128 private immutable beta = 5; // Midpoint of the sigmoid curve (volatility level)
+    int128 private immutable alphaValue; // Steepness of the sigmoid curve
+    int128 private immutable betaValue; // Midpoint of the sigmoid curve (volatility level)
 
     AggregatorV3Interface internal volatility24HFeed;
     AggregatorV3Interface internal volatility7DFeed;
@@ -41,38 +41,33 @@ contract BestFeesHook is BaseHook {
     uint24 public constant BASE_FEE = 5000; // 0.5%
 
     error MustUseDynamicFee();
+    error InvalidFeeBounds();
 
-    // Initialize BaseHook parent contract in the constructor
     constructor(
         IPoolManager _poolManager,
         address _volatility24HFeed,
         address _volatility7DFeed,
-        uint256 _minFee,
-        uint256 _maxFee,
-        uint256 _alpha,
-        uint256 _beta
+        int256 _minFee,
+        int256 _maxFee,
+        int128 _alpha,
+        int128 _beta
     ) BaseHook(_poolManager) {
-        // Initialize parameters as 64x64 fixed-point numbers
-        require(
-            uint24(_minFee) >= type(uint24).min &&
-                uint24(_minFee) <= type(uint24).max,
-            "minFee range out of uint24 range"
-        );
-        require(
-            uint24(_maxFee) >= type(uint24).min &&
-                uint24(_maxFee) <= type(uint24).max,
-            "maxFee range out of uint24 range"
-        );
-        minFee = ABDKMath64x64.fromUInt(_minFee); // Convert to fixed-point
-        maxFee = ABDKMath64x64.fromUInt(_maxFee);
-        alpha = ABDKMath64x64.fromUInt(_alpha);
-        beta = ABDKMath64x64.fromUInt(_beta);
-
+        // Convert addresses to AggregatorV3Interface
         volatility24HFeed = AggregatorV3Interface(_volatility24HFeed);
         volatility7DFeed = AggregatorV3Interface(_volatility7DFeed);
+
+        // Validate and set fee bounds
+        if (_minFee >= _maxFee) revert InvalidFeeBounds();
+
+        // Convert to fixed-point and store
+        minFee = ABDKMath64x64.fromInt(_minFee);
+        maxFee = ABDKMath64x64.fromInt(_maxFee);
+
+        // Set sigmoid parameters with higher default values if none provided
+        alphaValue = _alpha == 0 ? ABDKMath64x64.fromUInt(5) : _alpha; // Increased steepness
+        betaValue = _beta == 0 ? ABDKMath64x64.fromUInt(3) : _beta; // Lower midpoint
     }
 
-    // Required override function for BaseHook to let the PoolManager know which hooks are implemented
     function getHookPermissions()
         public
         pure
@@ -103,25 +98,19 @@ contract BestFeesHook is BaseHook {
         PoolKey calldata key,
         uint160
     ) external pure override returns (bytes4) {
-        // `.isDynamicFee()` function comes from using
-        // the `SwapFeeLibrary` for `uint24`
         if (!key.fee.isDynamicFee()) revert MustUseDynamicFee();
         return this.beforeInitialize.selector;
     }
-
-    //TODO make sure this works properly, even without a reliable data feed
     function beforeSwap(
         address,
         PoolKey calldata key,
         IPoolManager.SwapParams calldata,
         bytes calldata
-    ) external override returns (bytes4, BeforeSwapDelta, uint24) {
+    ) external view override returns (bytes4, BeforeSwapDelta, uint24) {
         uint24 fee = getFee(key.toId());
-        // If we wanted to generally update LP fee for a longer-term than per-swap
-        // poolManager.updateDynamicLPFee(key, fee);
-
         // For overriding fee per swap:
         uint24 feeWithFlag = fee | LPFeeLibrary.OVERRIDE_FEE_FLAG;
+
         return (
             this.beforeSwap.selector,
             BeforeSwapDeltaLibrary.ZERO_DELTA,
@@ -195,7 +184,6 @@ contract BestFeesHook is BaseHook {
         delete dataFeedByPool[key.toId()];
     }
 
-    //TODO Check if math works out, find good a and b default values
     /**
      * @notice Calculate the dynamic fee based on volatility using a sigmoid function
      * Sigmoid Function Explanation:
@@ -223,24 +211,39 @@ contract BestFeesHook is BaseHook {
         int128 alpha,
         int128 beta
     ) public view returns (uint24) {
+        // If volatility is very high (e.g., > 20%), return maximum fee
+        if (volatility > 2000000) {
+            // 20% with 5 decimals
+            return uint24(ABDKMath64x64.toUInt(maxFee));
+        }
+
+        // If volatility is 0, return minimum fee
+        if (volatility == 0) {
+            return uint24(ABDKMath64x64.toUInt(minFee));
+        }
+
         int128 vol = ABDKMath64x64.fromInt(volatility);
-        //TODO this value should come from elsewhere
         int128 decimals = ABDKMath64x64.fromUInt(10 ** 5);
-        // (volatility - b)
-        int128 scaledVolatility = vol.sub(beta.mul(decimals));
-        // a * (volatility - b)
-        int128 exponent = alpha.mul(scaledVolatility).div(decimals);
-        // exp(-a * (volatility - b))
+
+        // Adjust the scaling to ensure proper range coverage
+        int128 scaledVolatility = vol.div(decimals).sub(beta); // Remove decimals multiplication from beta
+        int128 exponent = alpha.mul(scaledVolatility);
         int128 expValue = ABDKMath64x64.exp(exponent.neg());
         int128 sigmoid = ABDKMath64x64.div(
             ABDKMath64x64.fromInt(1),
             ABDKMath64x64.fromInt(1).add(expValue)
         );
-        // Map sigmoid output to the fee range: minFee + (maxFee - minFee) * sigmoid
-        int128 feeRange = maxFee.sub(minFee); // (maxFee - minFee)
+        int128 feeRange = maxFee.sub(minFee);
         int128 dynamicFee = minFee.add(feeRange.mul(sigmoid));
 
-        // Convert dynamicFee to uint24 (basis points)
+        // Ensure fee stays within bounds
+        if (dynamicFee < minFee) {
+            return uint24(ABDKMath64x64.toUInt(minFee));
+        }
+        if (dynamicFee > maxFee) {
+            return uint24(ABDKMath64x64.toUInt(maxFee));
+        }
+
         return uint24(ABDKMath64x64.toUInt(dynamicFee));
     }
 
@@ -248,39 +251,37 @@ contract BestFeesHook is BaseHook {
         int256 vol7d,
         int256 vol24h
     ) public view returns (uint24) {
-        // Calculate the trend
         int256 trend = vol7d - vol24h;
 
         // Adjust sigmoid parameters based on the trend
-        int128 adjustedAlpha = alpha; // Base steepness
-        int128 adjustedBeta = beta; // Base midpoint
+        int128 adjustedAlpha = alphaValue; // Base steepness
+        int128 adjustedBeta = betaValue; // Base midpoint
 
         if (trend > 0) {
             // Decreasing volatility: Favor lower fees
 
             // Reduce steepness - default value = 1
-            adjustedAlpha = alpha.sub(
-                ABDKMath64x64.div(alpha, ABDKMath64x64.fromUInt(2))
+            adjustedAlpha = alphaValue.sub(
+                ABDKMath64x64.div(alphaValue, ABDKMath64x64.fromUInt(2))
             );
 
             // Raise midpoint - default value = 6
-            adjustedBeta = beta.add(
-                ABDKMath64x64.div(beta, ABDKMath64x64.fromUInt(5))
+            adjustedBeta = betaValue.add(
+                ABDKMath64x64.div(betaValue, ABDKMath64x64.fromUInt(5))
             );
         } else if (trend < 0) {
             // Increasing volatility: Favor higher fees
 
             // Increase steepness - default value = 3
-            adjustedAlpha = alpha.add(
-                ABDKMath64x64.div(alpha, ABDKMath64x64.fromUInt(2))
+            adjustedAlpha = alphaValue.add(
+                ABDKMath64x64.div(alphaValue, ABDKMath64x64.fromUInt(2))
             );
             // Lower midpoint - default value = 4
-            adjustedBeta = beta.sub(
-                ABDKMath64x64.div(beta, ABDKMath64x64.fromUInt(5))
+            adjustedBeta = betaValue.sub(
+                ABDKMath64x64.div(betaValue, ABDKMath64x64.fromUInt(5))
             );
         }
 
-        // Calculate the sigmoid-based fee using adjusted parameters
         return calculateSigmoidFee(vol24h, adjustedAlpha, adjustedBeta);
     }
 }
