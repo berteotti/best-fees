@@ -8,7 +8,7 @@ Our project, the Best Fee Hook for Uniswap V4, is meant to make fees better by l
 
 The idea is to make fees much more dynamic by creating a relationship with market factors like volatility.
 
-In this case the volatility of last 7 days is compared agaisnt last 24 hours volatity to assess if is increasing or decresing. This is used to tune the sigmoid function to return higher fees (if 24 hours volatility is higher) or vice-versa.
+In this case the volatility of last 7 days is compared against last 24 hours to assess if is increasing or decreasing. This is used to tune the sigmoid function to return higher fees (if 24 hours volatility is higher) or vice-versa.
 
 This is only a glimpse of what's possible.
 
@@ -22,11 +22,13 @@ Volatility serves as a key indicator of investment risk. Higher volatility, gene
 - Increased potential for both gains and losses.
 - A need for more careful risk management strategies.
 
-Volatility can harm LPs with impermenant loss.
+Volatility can harm LPs with impermanent loss.
+
+By taking that into account we can make fees better.
 
 ## **Impact**
 
-There is a need for incentives in high volatiliy times, by making fees dynamic based on volatility we increase fees on high volatity times making pools more attractive to LPs.
+There is a need for incentives in high volatiliy times, by making fees dynamic based on volatility we increase fees on high volatility times making pools more attractive to LPs.
 
 ## **Integrations**
 

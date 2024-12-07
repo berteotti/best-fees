@@ -104,13 +104,13 @@ contract TestBestFeesHook is Test, Deployers {
             AggregatorV3Interface(address(mockV3Aggregator24H))
         );
 
-        console.log("value", value);
+        console.log("volatility 24:", value);
     }
 
     function test_GetFee() public {
         mockV3Aggregator24H.updateAnswer(INITIAL_ANSWER_24H);
         uint24 value = hook.getFee(key.toId());
 
-        console.log("value", value);
+        console.log("get fee:", value);
     }
 }
