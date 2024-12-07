@@ -24,8 +24,6 @@ Volatility serves as a key indicator of investment risk. Higher volatility, gene
 
 Volatility can harm LPs with impermanent loss.
 
-By taking that into account we can make fees better.
-
 ## **Impact**
 
 There is a need for incentives in high volatiliy times, by making fees dynamic based on volatility we increase fees on high volatility times making pools more attractive to LPs.
