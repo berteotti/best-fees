@@ -1,6 +1,7 @@
 # Best fee hook
-
 Dynamic fee based on asset volatility. Made as part of UHI3 cohort from Atrium.
+
+![best fee hook](/best-fee-hook.png)
 
 ## **Description**
 
