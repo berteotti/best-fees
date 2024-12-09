@@ -37,8 +37,7 @@ contract BestFeesHook is BaseHook {
 
     mapping(PoolId poolId => DataFeed) dataFeedByPool;
 
-    // The default base fees we will charge
-    uint24 public constant BASE_FEE = 5000; // 0.5%
+    uint24 public constant BASE_FEE = 5000; // 0.5% default base fees we will charge
 
     error MustUseDynamicFee();
     error InvalidFeeBounds();
@@ -52,7 +51,6 @@ contract BestFeesHook is BaseHook {
         int128 _alpha,
         int128 _beta
     ) BaseHook(_poolManager) {
-        // Convert addresses to AggregatorV3Interface
         volatility24HFeed = AggregatorV3Interface(_volatility24HFeed);
         volatility7DFeed = AggregatorV3Interface(_volatility7DFeed);
 
@@ -108,8 +106,8 @@ contract BestFeesHook is BaseHook {
         bytes calldata
     ) external view override returns (bytes4, BeforeSwapDelta, uint24) {
         uint24 fee = getFee(key.toId());
-        // For overriding fee per swap:
-        uint24 feeWithFlag = fee | LPFeeLibrary.OVERRIDE_FEE_FLAG;
+
+        uint24 feeWithFlag = fee | LPFeeLibrary.OVERRIDE_FEE_FLAG; // For overriding fee per swap:
 
         return (
             this.beforeSwap.selector,
@@ -222,11 +220,11 @@ contract BestFeesHook is BaseHook {
             return uint24(ABDKMath64x64.toUInt(minFee));
         }
 
-        int128 vol = ABDKMath64x64.fromInt(volatility);
+        int128 volatilityFixedPoint = ABDKMath64x64.fromInt(volatility);
         int128 decimals = ABDKMath64x64.fromUInt(10 ** 5);
 
         // Adjust the scaling to ensure proper range coverage
-        int128 scaledVolatility = vol.div(decimals).sub(beta); // Remove decimals multiplication from beta
+        int128 scaledVolatility = volatilityFixedPoint.div(decimals).sub(beta); // Remove decimals multiplication from beta
         int128 exponent = alpha.mul(scaledVolatility);
         int128 expValue = ABDKMath64x64.exp(exponent.neg());
         int128 sigmoid = ABDKMath64x64.div(

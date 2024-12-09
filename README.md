@@ -45,7 +45,6 @@ We can take into account other market factors like swap volume, gas fees and liq
 
 Leonardo Berteotti (@berteotti) & Diogo Ferreira (@diogomartf)
 
-
 ---
 
 ## Visualize it with Jupiter notebook
